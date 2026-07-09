@@ -3,3 +3,6 @@ opencv-python
 numpy
 scikit-learn
 joblib
+pillow
+torch
+torchvision
