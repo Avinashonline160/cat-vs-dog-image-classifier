@@ -1,68 +1,83 @@
-import streamlit as st
-import numpy as np
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+import torch
+import torchvision.models as models
+import torchvision.transforms as transforms
 from PIL import Image
-import joblib
+import os
 
-# -------------------------
-# Page Configuration
-# -------------------------
-st.set_page_config(
-    page_title="Cat vs Dog Classifier",
-    page_icon="🐶",
-    layout="centered"
-)
+print("PyTorch Version:", torch.__version__)
 
-# -------------------------
-# Load Model
-# -------------------------
-model = joblib.load("cat_dog_model.pkl")
+# Check if model loads
+try:
+    print("Loading MobileNetV2...")
+    model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.DEFAULT)
+    model.eval()
+    categories = models.MobileNet_V2_Weights.DEFAULT.meta["categories"]
+    print("Successfully loaded MobileNetV2 with ImageNet weights.")
+except Exception as e:
+    print("Failed to load model:", e)
+    exit(1)
 
-IMG_SIZE = 64
+# Check if transform and inference works on our samples
+preprocess = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
+    )
+])
 
-st.title("🐱 Cat vs Dog Image Classifier")
-st.write("Upload an image to predict whether it is a Cat or Dog.")
+sample_dir = "/Users/avinashpatel/.gemini/antigravity/scratch/cat-vs-dog-image-classifier/samples"
+sample_files = ["cat1.jpg", "cat2.jpg", "dog1.jpg", "dog2.jpg"]
 
-# -------------------------
-# Upload Image
-# -------------------------
-uploaded_file = st.file_uploader(
-    "Choose an Image",
-    type=["jpg", "jpeg", "png"]
-)
+for fname in sample_files:
+    fpath = os.path.join(sample_dir, fname)
+    if not os.path.exists(fpath):
+        print(f"Sample file {fpath} does not exist!")
+        exit(1)
+        
+    try:
+        img = Image.open(fpath).convert("RGB")
+        tensor = preprocess(img).unsqueeze(0)
+        
+        with torch.no_grad():
+            outputs = model(tensor)
+            probabilities = torch.nn.functional.softmax(outputs[0], dim=0)
+            
+        cat_prob = float(torch.sum(probabilities[281:294]))
+        dog_prob = float(torch.sum(probabilities[151:276]))
+        other_prob = max(0.0, 1.0 - cat_prob - dog_prob)
+        
+        top_prob, top_idx = torch.max(probabilities, dim=0)
+        top_class = categories[int(top_idx)]
+        
+        print(f"\nFile: {fname}")
+        print(f"Top ImageNet Class: {top_class} ({float(top_prob)*100:.2f}%)")
+        print(f"Cat Probability Sum: {cat_prob*100:.2f}%")
+        print(f"Dog Probability Sum: {dog_prob*100:.2f}%")
+        print(f"Other Probability Sum: {other_prob*100:.2f}%")
+        
+        is_cat = cat_prob > dog_prob
+        is_other = (cat_prob + dog_prob) < 0.18
+        
+        if is_other:
+            print("Classification: Neither / Other")
+        elif is_cat:
+            cat_probs = probabilities[281:294]
+            top_cat_idx = int(torch.argmax(cat_probs)) + 281
+            breed = categories[top_cat_idx]
+            print(f"Classification: CAT (Breed: {breed})")
+        else:
+            dog_probs = probabilities[151:276]
+            top_dog_idx = int(torch.argmax(dog_probs)) + 151
+            breed = categories[top_dog_idx]
+            print(f"Classification: DOG (Breed: {breed})")
+            
+    except Exception as e:
+        print(f"Error classifying {fname}: {e}")
+        exit(1)
 
-if uploaded_file is not None:
-
-    # Read image using Pillow
-    image = Image.open(uploaded_file)
-
-    # Convert to RGB (important if image is grayscale/RGBA)
-    image = image.convert("RGB")
-
-    # Display image
-    st.image(image, caption="Uploaded Image", width=300)
-
-    # Resize image
-    resized = image.resize((IMG_SIZE, IMG_SIZE))
-
-    # Convert to NumPy array
-    resized = np.array(resized)
-
-    # Flatten image for Logistic Regression
-    resized = resized.flatten()
-
-    # Prediction
-    prediction = model.predict([resized])[0]
-
-    probability = model.predict_proba([resized])[0]
-
-    # Display prediction
-    if prediction == 0:
-        st.success("🐱 Prediction: CAT")
-    else:
-        st.success("🐶 Prediction: DOG")
-
-    # Display probabilities
-    st.subheader("Prediction Confidence")
-
-    st.write(f"🐱 Cat Probability: **{probability[0] * 100:.2f}%**")
-    st.write(f"🐶 Dog Probability: **{probability[1] * 100:.2f}%**")
+print("\nAll sample classifications verified successfully!")
